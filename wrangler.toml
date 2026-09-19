@@ -1,0 +1,38 @@
+name = "tictactoe-worker"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# D1 database binding. Create the database first:
+#   wrangler d1 create tictactoe-db
+# then paste the returned database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "tictactoe-db"
+database_id = "3c6fa39d-d862-48d9-8cdd-7d7b1dd3e9fd"
+
+# Durable Object used ONLY as a transient, in-memory relay for the live
+# board of an active PvP match (so two different phones see each other's
+# taps in real time). It never writes to disk/D1 — see gameRoom.js for why
+# this doesn't conflict with the "don't store moves/board" requirement.
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom"]
+
+# Runs every 5 minutes to purge expired temporary game rows (and refund any
+# abandoned in-progress match). Adjust the cadence to taste — the games
+# table is small and this stays cheap.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Secrets (set with `wrangler secret put <NAME>`, never committed here):
+#   TELEGRAM_BOT_TOKEN        - from @BotFather
+#   TELEGRAM_WEBHOOK_SECRET   - optional random string, must match setWebhook's secret_token
+#
+# Plain (non-secret) vars can live here or also be set as secrets — either works:
+[vars]
+TELEGRAM_BOT_USERNAME = "tictactoekarbot"
+TELEGRAM_MINIAPP_NAME = "tictactoekar"
