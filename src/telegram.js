@@ -150,8 +150,15 @@ export function answerPreCheckoutQuery(env, preCheckoutQueryId, ok, errorMessage
 }
 
 function miniAppUrl(env, startParam) {
-  const base = `https://t.me/${env.TELEGRAM_BOT_USERNAME}/${env.TELEGRAM_MINIAPP_NAME}`;
-  return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : base;
+  // Deliberately the bot-level `t.me/<bot>?startapp=` form, NOT the
+  // named-app `t.me/<bot>/<appname>?startapp=` form — the named-app link
+  // needs a noticeably newer Telegram client to resolve (it exists to let
+  // one bot expose several different Mini Apps by name), while this form
+  // only needs the bot's own default Mini App and is understood by far
+  // older Telegram versions too. Same rich preview + direct-launch
+  // behavior, just compatible with more people's phones.
+  const base = `https://t.me/${env.TELEGRAM_BOT_USERNAME}`;
+  return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : `${base}?startapp=open`;
 }
 
 function playGameKeyboard(env, startParam, label = '🎮 Open Game') {
