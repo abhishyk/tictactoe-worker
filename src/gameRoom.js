@@ -14,7 +14,7 @@
 // which does not depend on this object at all.
 // Emoji reactions players can send each other mid-match. Fixed whitelist so
 // the relay only ever carries a known-safe value, never arbitrary text.
-const ALLOWED_REACTIONS = ['👍', '😂', '😮', '🔥', '😢', '👏'];
+const ALLOWED_REACTIONS = ['👍', '😂', '😮', '🔥', '😢', '👏', '❤️', '🎉', '💯', '😱'];
 
 export class GameRoom {
   constructor(state, env) {
