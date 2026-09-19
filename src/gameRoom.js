@@ -21,7 +21,10 @@ export class GameRoom {
     this.state = state;
     this.env = env;
     this.board = Array(9).fill(null);
-    this.turn = 'X'; // player1 is always X and always moves first
+    // Who moves first is random each match (X always moves first, but which
+    // *player* is X is a coin flip) — previously the challenger (player1)
+    // was hard-coded as X, so the same person always got the first move.
+    this.turn = Math.random() < 0.5 ? 'X' : 'O';
     this.players = null; // { player1: telegramId, player2: telegramId }
     // Ephemeral only — like the board, this is never persisted anywhere.
     // Just the single most recent reaction; the client tracks the
@@ -84,7 +87,7 @@ export class GameRoom {
 
       if (body.action === 'reset') {
         this.board = Array(9).fill(null);
-        this.turn = 'X';
+        this.turn = Math.random() < 0.5 ? 'X' : 'O'; // re-randomize on rematch too
         this.lastReaction = null;
         return this.jsonState();
       }
