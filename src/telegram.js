@@ -177,12 +177,11 @@ export async function handleTelegramWebhook(request, env) {
       // Shows exactly what Telegram sent for reply_to_message so we can see
       // whether it's a real reply and who Telegram thinks it's from.
       if ((update.message.text || '').startsWith('/challenge')) {
-        console.log('DEBUG /challenge update:', JSON.stringify({
-          text: update.message.text,
-          has_reply_to_message: !!update.message.reply_to_message,
-          reply_to_from: update.message.reply_to_message?.from,
-          chat_type: update.message.chat?.type,
-        }));
+        // Full raw message object this time — we need to see every field
+        // Telegram actually sent (reply_to_message may be missing while a
+        // differently-named field like quote/external_reply carries the
+        // reply info instead, which the full dump will reveal).
+        console.log('DEBUG /challenge FULL:', JSON.stringify(update.message));
       }
       await handleMessage(update.message, env);
     } else if (update.callback_query) {
