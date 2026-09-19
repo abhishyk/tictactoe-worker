@@ -20,7 +20,7 @@ class_name = "GameRoom"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["GameRoom"]
+new_sqlite_classes = ["GameRoom"]
 
 # Runs every 5 minutes to purge expired temporary game rows (and refund any
 # abandoned in-progress match). Adjust the cadence to taste — the games
