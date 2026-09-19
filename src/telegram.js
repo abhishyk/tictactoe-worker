@@ -173,6 +173,17 @@ export async function handleTelegramWebhook(request, env) {
     if (update.pre_checkout_query) {
       await handlePreCheckoutQuery(update.pre_checkout_query, env);
     } else if (update.message) {
+      // TEMPORARY DEBUG LOG — remove once /challenge reply-detection is confirmed working.
+      // Shows exactly what Telegram sent for reply_to_message so we can see
+      // whether it's a real reply and who Telegram thinks it's from.
+      if ((update.message.text || '').startsWith('/challenge')) {
+        console.log('DEBUG /challenge update:', JSON.stringify({
+          text: update.message.text,
+          has_reply_to_message: !!update.message.reply_to_message,
+          reply_to_from: update.message.reply_to_message?.from,
+          chat_type: update.message.chat?.type,
+        }));
+      }
       await handleMessage(update.message, env);
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query, env);
