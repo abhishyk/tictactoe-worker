@@ -290,10 +290,14 @@ async function handleMessage(message, env) {
 
   if (text.startsWith('/wallet')) {
     const user = await getOrCreateUser(env, fromId, username);
+    // ID + username shown together so it's unambiguous whose wallet this is
+    // (useful when comparing with /leaderboard, or sharing your ID for
+    // someone to /challenge @username you by). <code> makes it tap-to-copy
+    // in Telegram.
     await sendMessage(
       env,
       chatId,
-      `💰 <b>Wallet</b>\n\nCoins: <b>${user.coins}</b>\nMatches: ${user.total_matches}\nWins: ${user.wins}\nLosses: ${user.losses}`
+      `💰 <b>TicTacToekar Wallet</b>\n\n${username ? '@' + username + ' — ' : ''}ID: <code>${fromId}</code>\n\nCoins: <b>${user.coins}</b>\nMatches: ${user.total_matches}\nWins: ${user.wins}\nLosses: ${user.losses}`
     );
     return;
   }
@@ -310,8 +314,12 @@ async function handleMessage(message, env) {
 
   if (text.startsWith('/leaderboard')) {
     const rows = await getLeaderboard(env, 10);
+    // ID shown alongside each name so two players who happen to share a
+    // display name (or a player with no @username at all) are still
+    // distinguishable — and so you have their ID handy to /challenge them.
     const lines = rows.map(
-      (r, i) => `${i + 1}. ${r.username ? '@' + r.username : 'Player'} — ${r.wins} wins`
+      (r, i) =>
+        `${i + 1}. ${r.username ? '@' + r.username : 'Player'} <code>(${r.telegram_id})</code> — ${r.wins} wins`
     );
     await sendMessage(
       env,
