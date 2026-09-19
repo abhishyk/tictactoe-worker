@@ -15,6 +15,7 @@ import {
 import { handleLeaderboard } from './leaderboard.js';
 import { handleTelegramWebhook, authenticateRequest } from './telegram.js';
 import { handleShopPackages, handleShopInvoice } from './shop.js';
+import { handleSpinInfo, handleSpin } from './spin.js';
 import { GameRoom } from './gameRoom.js';
 
 export { GameRoom };
@@ -85,6 +86,12 @@ export default {
       }
       if (path === '/api/shop/invoice' && request.method === 'POST') {
         return await handleShopInvoice(request, env);
+      }
+      if (path === '/api/spin' && request.method === 'GET') {
+        return await handleSpinInfo(request, env);
+      }
+      if (path === '/api/spin' && request.method === 'POST') {
+        return await handleSpin(request, env);
       }
       if (path === '/api/telegram/webhook' && request.method === 'POST') {
         // Optional shared-secret check (set TELEGRAM_WEBHOOK_SECRET and
