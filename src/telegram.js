@@ -1,6 +1,6 @@
 // Telegram integration: initData validation (Mini App auth) + Bot webhook.
 import { nowSeconds, sanitizeUsername, COIN_PACKAGES } from './utils.js';
-import { getOrCreateUser, getUserByTelegramId } from './auth.js';
+import { getOrCreateUser, getUserByTelegramId, getUserByUsername } from './auth.js';
 import { createChallenge, acceptChallenge, declineChallenge } from './games.js';
 import { getLeaderboard } from './leaderboard.js';
 
@@ -173,16 +173,6 @@ export async function handleTelegramWebhook(request, env) {
     if (update.pre_checkout_query) {
       await handlePreCheckoutQuery(update.pre_checkout_query, env);
     } else if (update.message) {
-      // TEMPORARY DEBUG LOG — remove once /challenge reply-detection is confirmed working.
-      // Shows exactly what Telegram sent for reply_to_message so we can see
-      // whether it's a real reply and who Telegram thinks it's from.
-      if ((update.message.text || '').startsWith('/challenge')) {
-        // Full raw message object this time — we need to see every field
-        // Telegram actually sent (reply_to_message may be missing while a
-        // differently-named field like quote/external_reply carries the
-        // reply info instead, which the full dump will reveal).
-        console.log('DEBUG /challenge FULL:', JSON.stringify(update.message));
-      }
       await handleMessage(update.message, env);
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query, env);
@@ -214,28 +204,53 @@ async function handleMessage(message, env) {
     await sendMessage(
       env,
       chatId,
-      '🎮 <b>Tic Tac Toe</b>\n\nChallenge a friend, play the computer, or climb the leaderboard.\n\n💡 In a group, reply to a member\'s message with /challenge to challenge them directly.',
+      '🎮 <b>Tic Tac Toe</b>\n\nChallenge a friend, play the computer, or climb the leaderboard.\n\n💡 In a group: reply to a member\'s message with /challenge, or use /challenge @username directly.',
       playGameKeyboard(env, null, '▶️ Open Game')
     );
     return;
   }
 
   if (text.startsWith('/challenge')) {
-    // Telegram bots can't look up an arbitrary @username unless that person
-    // has already messaged the bot — so the reliable way to identify "which
-    // member" is to require the command be sent as a REPLY to that member's
-    // message. Telegram includes the real user id/username on
-    // `reply_to_message.from` even under default group privacy mode,
-    // because it's part of the message the command itself is attached to.
-    const target = message.reply_to_message?.from;
+    // Primary path: command sent as a REPLY to the target's message — Telegram
+    // normally includes the real user id/username on `reply_to_message.from`
+    // even under default group privacy mode, because it's part of the message
+    // the command itself is attached to.
+    //
+    // NOTE: some Telegram accounts have privacy settings that make Telegram
+    // send the reply as `external_reply` with `origin.type: "hidden_user"`
+    // instead of a proper `reply_to_message` — in that case there is no real
+    // user id at all, by Telegram's own design, and no server-side code can
+    // recover it. `/challenge @username` below is the fallback for exactly
+    // that situation.
+    let target = message.reply_to_message?.from;
+    let targetUsername;
 
     if (!target) {
-      await sendMessage(
-        env,
-        chatId,
-        '⚠️ To challenge someone, reply to one of their messages with <code>/challenge</code>.'
-      );
-      return;
+      // Fallback path: /challenge @username — looks the person up in our own
+      // D1 `users` table (only works if they've messaged the bot or opened
+      // the Mini App at least once, since Telegram never lets a bot resolve
+      // an arbitrary @username to an id on its own).
+      const mention = text.split(/\s+/)[1];
+      if (mention && mention.startsWith('@')) {
+        const found = await getUserByUsername(env, mention);
+        if (!found) {
+          await sendMessage(
+            env,
+            chatId,
+            `⚠️ Couldn't find ${mention}. They need to have opened the bot or the Mini App at least once — or reply to one of their messages with <code>/challenge</code> instead.`
+          );
+          return;
+        }
+        targetUsername = found.username;
+        target = { id: found.telegram_id, is_bot: false, username: found.username };
+      } else {
+        await sendMessage(
+          env,
+          chatId,
+          '⚠️ To challenge someone, reply to one of their messages with <code>/challenge</code>, or use <code>/challenge @username</code>.'
+        );
+        return;
+      }
     }
     if (target.is_bot) {
       await sendMessage(env, chatId, "🤖 You can't challenge a bot — try a real group member.");
@@ -247,7 +262,7 @@ async function handleMessage(message, env) {
       return;
     }
 
-    const targetUsername = sanitizeUsername(target.username || target.first_name);
+    targetUsername = targetUsername || sanitizeUsername(target.username || target.first_name);
     await getOrCreateUser(env, fromId, username);
     await getOrCreateUser(env, targetId, targetUsername);
 
