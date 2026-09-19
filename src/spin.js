@@ -105,18 +105,38 @@ export async function handleSpin(request, env) {
 
   if (reward !== 'Better luck next time') {
     const who = user.username ? '@' + user.username : `ID ${auth.telegramId}`;
+    // Must be awaited — Cloudflare can tear the isolate down right after the
+    // response is sent, so a "fire and forget" call here can get cut off
+    // mid-flight before Telegram ever receives it (this is exactly what was
+    // silently dropping these messages). Every other bot message in this
+    // codebase awaits sendMessage() for the same reason; this endpoint
+    // should too.
     if (env.ADMIN_TELEGRAM_ID) {
-      sendMessage(
-        env,
-        env.ADMIN_TELEGRAM_ID,
-        `🎡 Spin Wheel win!\n\n${who} (<code>${auth.telegramId}</code>) won: <b>${reward}</b>\n\nFulfil it manually, then mark the spin_rewards row as fulfilled in D1.`
-      ).catch(() => {});
+      try {
+        const res = await sendMessage(
+          env,
+          env.ADMIN_TELEGRAM_ID,
+          `🎡 Spin Wheel win!\n\n${who} (<code>${auth.telegramId}</code>) won: <b>${reward}</b>\n\nFulfil it manually, then mark the spin_rewards row as fulfilled in D1.`
+        );
+        if (!res || res.ok === false) console.error('Spin admin notify failed', res);
+      } catch (err) {
+        // Don't let a failed admin notification block the player's own
+        // message or the response — the win is already safely in D1.
+        console.error('Spin admin notify threw', err);
+      }
+    } else {
+      console.error('Spin admin notify skipped — ADMIN_TELEGRAM_ID is not set');
     }
-    sendMessage(
-      env,
-      auth.telegramId,
-      `🎉 You won <b>${reward}</b> on the Spin Wheel!\n\nOur team will credit this to you shortly.`
-    ).catch(() => {});
+    try {
+      const res = await sendMessage(
+        env,
+        auth.telegramId,
+        `🎉 You won <b>${reward}</b> on the Spin Wheel!\n\nOur team will credit this to you shortly.`
+      );
+      if (!res || res.ok === false) console.error('Spin player notify failed', res);
+    } catch (err) {
+      console.error('Spin player notify threw', err);
+    }
   }
 
   return json({ reward, coins: updated.coins, segments: SEGMENT_LABELS });
