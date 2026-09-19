@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2024-11-01"
 
 # D1 database binding. Create the database first:
-#   wrangler d1 create tictactoe-db
+#   wrangler d1 create tictactoe-db 
 # then paste the returned database_id below.
 [[d1_databases]]
 binding = "DB"
