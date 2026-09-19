@@ -465,10 +465,19 @@ export async function handleGameResult(request, env, gameId) {
   }
 
   if (winnerTelegramId === null) {
-    // Genuine draw: no coin transfer, but it still counts as a played match.
+    // Genuine draw: both entry fees are refunded, so a draw is a true
+    // net-zero outcome — nobody should end up 10 coins down just because
+    // neither side won. (The entry fee was already deducted from both
+    // players back in acceptChallenge when the match started; without this
+    // refund it would silently vanish on a draw, which was a bug — coins
+    // should only ever move on a real win/loss, never on a draw.)
     await env.DB.batch([
-      env.DB.prepare('UPDATE users SET total_matches = total_matches + 1 WHERE telegram_id = ?').bind(game.player1_id),
-      env.DB.prepare('UPDATE users SET total_matches = total_matches + 1 WHERE telegram_id = ?').bind(game.player2_id),
+      env.DB.prepare(
+        'UPDATE users SET coins = coins + ?, total_matches = total_matches + 1 WHERE telegram_id = ?'
+      ).bind(ENTRY_COST, game.player1_id),
+      env.DB.prepare(
+        'UPDATE users SET coins = coins + ?, total_matches = total_matches + 1 WHERE telegram_id = ?'
+      ).bind(ENTRY_COST, game.player2_id),
     ]);
     return json({ status: 'completed', winnerId: null, draw: true });
   }
