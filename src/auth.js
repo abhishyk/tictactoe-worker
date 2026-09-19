@@ -18,6 +18,23 @@ export async function getUserById(env, id) {
 }
 
 /**
+ * Looks up a user by their Telegram @username (case-insensitive, exact match).
+ * Only finds people who have already talked to the bot at least once (i.e.
+ * they exist in our `users` table) — Telegram itself never lets a bot resolve
+ * an arbitrary @username to an id, so this is the only reliable way. Used as
+ * the /challenge @username fallback for groups where reply-based detection
+ * is blocked by the target's own Telegram privacy settings.
+ */
+export async function getUserByUsername(env, username) {
+  const clean = (username || '').replace(/^@/, '').trim();
+  if (!clean) return null;
+  const row = await env.DB.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE')
+    .bind(clean)
+    .first();
+  return row || null;
+}
+
+/**
  * Looks up a user by Telegram id, creating them with the starting coin grant
  * if this is their first time opening the Mini App. Only this function may
  * insert the initial balance — the frontend never sets it.
