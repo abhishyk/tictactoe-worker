@@ -150,15 +150,14 @@ export function answerPreCheckoutQuery(env, preCheckoutQueryId, ok, errorMessage
 }
 
 function miniAppUrl(env, startParam) {
-  // Deliberately the bot-level `t.me/<bot>?startapp=` form, NOT the
-  // named-app `t.me/<bot>/<appname>?startapp=` form — the named-app link
-  // needs a noticeably newer Telegram client to resolve (it exists to let
-  // one bot expose several different Mini Apps by name), while this form
-  // only needs the bot's own default Mini App and is understood by far
-  // older Telegram versions too. Same rich preview + direct-launch
-  // behavior, just compatible with more people's phones.
-  const base = `https://t.me/${env.TELEGRAM_BOT_USERNAME}`;
-  return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : `${base}?startapp=open`;
+  // Reverted: `t.me/<bot>?startapp=` (no app name) only auto-opens a Mini
+  // App if Telegram can tell WHICH app to launch, which for a bot created
+  // the normal BotFather /newapp way it can't infer — it needs the app's
+  // own short name in the path. The named-app form below is the one that
+  // actually works for this bot; the earlier "more compatible" swap was a
+  // guess that turned out wrong and broke /play instead of fixing anything.
+  const base = `https://t.me/${env.TELEGRAM_BOT_USERNAME}/${env.TELEGRAM_MINIAPP_NAME}`;
+  return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : base;
 }
 
 function playGameKeyboard(env, startParam, label = '🎮 Open Game') {
