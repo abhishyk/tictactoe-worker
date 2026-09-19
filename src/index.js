@@ -1,5 +1,5 @@
 // Cloudflare Worker entry point: HTTP router + cron handler.
-import { corsPreflight, json, notFound, rateLimit, ENTRY_COST } from './utils.js';
+import { corsPreflight, json, notFound, rateLimit, ENTRY_COST, CORS_HEADERS } from './utils.js';
 import { handleAuth } from './auth.js';
 import { handleMe, handlePlayers } from './users.js';
 import {
@@ -152,7 +152,17 @@ async function proxyToGameRoom(request, env, gameId, method) {
     init.body = await request.text();
   }
 
-  return stub.fetch(roomUrl.toString(), init);
+  const roomResponse = await stub.fetch(roomUrl.toString(), init);
+
+  // The Durable Object's own Response has no CORS headers (it doesn't know
+  // it's being called cross-origin from the Pages frontend), so the browser
+  // silently blocks it once it comes back through here. Re-wrap it with the
+  // same CORS headers every other endpoint already gets via json().
+  const headers = new Headers(roomResponse.headers);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  return new Response(roomResponse.body, { status: roomResponse.status, headers });
 }
 
 async function cleanupExpiredGames(env) {
