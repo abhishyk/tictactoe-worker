@@ -16,7 +16,7 @@ export const COIN_PACKAGES = [
   { id: 'pack_500', stars: 500, coins: 6500, label: '6,500 Coins' },
 ];
 
-const CORS_HEADERS = {
+export const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Telegram-Init-Data',
