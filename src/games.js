@@ -83,7 +83,11 @@ export async function acceptChallenge(env, gameId, accepterTelegramId) {
   }
 
   // Atomic: flip to 'started' only if still 'pending' (guards double-accept
-  // races), and deduct the entry fee from both players in the same batch.
+  // races). NOTE: the 10-coin entry fee is NOT deducted here anymore — it is
+  // only taken once the FIRST real move is played in the match (see
+  // gameRoom.js's chargeEntryFees()). This means an accepted challenge that
+  // nobody actually plays (app closed, never opened, etc.) never costs
+  // either player a single coin.
   const claim = await env.DB.prepare(
     `UPDATE games SET status = 'started' WHERE id = ? AND status = 'pending'`
   )
@@ -92,19 +96,6 @@ export async function acceptChallenge(env, gameId, accepterTelegramId) {
   if (!claim.meta || claim.meta.changes === 0) {
     return { ok: false, error: 'This challenge was already handled.' };
   }
-
-  await env.DB.batch([
-    env.DB.prepare('UPDATE users SET coins = coins - ? WHERE telegram_id = ? AND coins >= ?').bind(
-      ENTRY_COST,
-      game.player1_id,
-      ENTRY_COST
-    ),
-    env.DB.prepare('UPDATE users SET coins = coins - ? WHERE telegram_id = ? AND coins >= ?').bind(
-      ENTRY_COST,
-      game.player2_id,
-      ENTRY_COST
-    ),
-  ]);
 
   const updated = await getGameRow(env, gameId);
   return { ok: true, game: updated };
@@ -141,8 +132,28 @@ export async function forfeitGame(env, gameId, quitterTelegramId) {
   if (game.status === 'completed') {
     return { ok: true, alreadySettled: true, winnerId: game.winner_id || null };
   }
+  if (game.status === 'cancelled' || game.status === 'expired') {
+    return { ok: true, alreadySettled: true, winnerId: null, noFaultCancel: true };
+  }
   if (game.status !== 'started') {
     return { ok: false, error: `Game is not active (status: ${game.status}).` };
+  }
+
+  // Nobody has played a single move yet, so the 10-coin entry fee was never
+  // actually taken from either side (it's only charged on the first real
+  // move — see gameRoom.js). Quitting now is therefore a true no-fault
+  // cancel: no coins move, no win/loss, no total_matches change for anyone.
+  if (!game.entry_deducted) {
+    const cancelClaim = await env.DB.prepare(
+      `UPDATE games SET status = 'cancelled' WHERE id = ? AND status = 'started'`
+    )
+      .bind(gameId)
+      .run();
+    if (!cancelClaim.meta || cancelClaim.meta.changes === 0) {
+      const finalGame = await getGameRow(env, gameId);
+      return { ok: true, alreadySettled: true, winnerId: finalGame.winner_id || null };
+    }
+    return { ok: true, winnerId: null, noFaultCancel: true };
   }
 
   const winnerTelegramId = isP1 ? game.player2_id : game.player1_id;
@@ -346,6 +357,9 @@ export async function handleForfeit(request, env, gameId) {
 
   const result = await forfeitGame(env, gameId, auth.telegramId);
   if (!result.ok) return json({ error: result.error }, 400);
+  if (result.noFaultCancel) {
+    return json({ status: 'cancelled', winnerId: null, noFaultCancel: true });
+  }
   return json({ status: 'completed', winnerId: result.winnerId });
 }
 
