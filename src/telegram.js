@@ -102,6 +102,47 @@ export function sendMessage(env, chatId, text, replyMarkup) {
   });
 }
 
+export function sendPhoto(env, chatId, photo, caption, replyMarkup) {
+  return callTelegramApi(env, 'sendPhoto', {
+    chat_id: chatId,
+    photo,
+    caption,
+    parse_mode: 'HTML',
+    reply_markup: replyMarkup,
+  });
+}
+
+// Cached per-isolate (not persisted) — a Worker isolate can live for a
+// while, so this avoids re-fetching the same file_id on every single group
+// message. If the isolate recycles, it's just fetched again once; harmless.
+let cachedBotPhotoFileId;
+async function getBotProfilePhotoFileId(env) {
+  if (cachedBotPhotoFileId !== undefined) return cachedBotPhotoFileId;
+  try {
+    const res = await callTelegramApi(env, 'getChat', { chat_id: '@' + env.TELEGRAM_BOT_USERNAME });
+    cachedBotPhotoFileId = res.ok && res.result.photo ? res.result.photo.big_file_id : null;
+  } catch (err) {
+    console.error('getBotProfilePhotoFileId failed', err);
+    cachedBotPhotoFileId = null;
+  }
+  return cachedBotPhotoFileId;
+}
+
+/**
+ * Sends a group broadcast (nudge / keyword-reply) with the bot's own
+ * profile picture attached when one is set in BotFather, falling back to a
+ * plain text message if not (or if the photo send fails for any reason).
+ */
+async function sendGroupBroadcast(env, chatId, text, replyMarkup) {
+  const photoId = await getBotProfilePhotoFileId(env);
+  if (photoId) {
+    const res = await sendPhoto(env, chatId, photoId, text, replyMarkup);
+    if (res && res.ok !== false) return res;
+    // Photo send failed for some reason — don't lose the message entirely.
+  }
+  return sendMessage(env, chatId, text, replyMarkup);
+}
+
 export function editMessageText(env, chatId, messageId, text, replyMarkup) {
   return callTelegramApi(env, 'editMessageText', {
     chat_id: chatId,
@@ -220,9 +261,9 @@ const CHAT_TRIGGERS = /\b(tic\s*tac\s*toe|game\s*khel|challenge|coins?|money)\b/
 // — see app.js's init()), not just the app's home screen, so tapping it
 // drops the player directly into a live game against the bot.
 const CHAT_REPLIES = [
-  '⚔️ <b>Tic Tac Toe Challenge!</b> ⚔️\n\nTic Tac Toe pe Tic Tac Toe khelna hai? 😏\n<b>Dum hai to mujhe game mein hara ke dikhao!</b>',
-  "🏆 <b>I'm challenging YOU!</b> 🏆\n\nBeat me and win a prize! 💰\n\nSoch kya rahe ho? Neeche button dabao aur seedha match shuru karo 👇",
-  '😏 <b>Coins ki baat ho rahi hai?</b>\n\nSabse aasan tarika — mujhe (bot ko) hara ke dikhao aur coins jeeto! 🪙\n\n⚔️ Ready ho?',
+  '<blockquote>⚔️ <b>Challenge Alert</b> ⚔️</blockquote>\n\n🎮 <b>Game</b> : Tic Tac Toe\n🏆 <b>Prize</b> : Coins + Bragging Rights\n😏 <b>Dare</b> : Beat me if you can!\n\nTap below to play now 👇',
+  "<blockquote>🏆 <b>I'm Challenging YOU</b> 🏆</blockquote>\n\n💰 <b>Reward</b> : Win Coins\n⚔️ <b>Opponent</b> : This Bot\n🔥 <b>Status</b> : Waiting for you...\n\nThink you can win? Prove it 👇",
+  '<blockquote>😏 <b>Someone Said Coins?</b> 😏</blockquote>\n\n🪙 <b>Easiest Way</b> : Beat the Bot\n🎮 <b>Game</b> : Tic Tac Toe\n⚡ <b>Ready</b> : Let\'s go!\n\nTap the button to start 👇',
 ];
 
 // Avoids replying every time the trigger fires in a busy group — one
@@ -242,7 +283,7 @@ async function maybeReactToKeyword(env, chat, text) {
 
     await registerGroup(env, chat); // make sure it's tracked even if no command was ever used
     const reply = CHAT_REPLIES[Math.floor(Math.random() * CHAT_REPLIES.length)];
-    await sendMessage(env, chatId, reply, playGameKeyboard(env, 'playbot', '⚔️ Beat The Bot'));
+    await sendGroupBroadcast(env, chatId, reply, playGameKeyboard(env, 'playbot', '⚔️ Beat The Bot'));
     await env.DB.prepare('UPDATE groups SET last_keyword_reply_at = ? WHERE chat_id = ?')
       .bind(nowSeconds(), chatId)
       .run();
@@ -524,10 +565,10 @@ const NUDGE_INTERVAL_SECONDS = 6 * 60 * 60;
 // A small rotating pool so the group doesn't see the exact same line every
 // time — picked randomly on each send.
 const NUDGE_MESSAGES = [
-  '🎮 Is group ka Tic Tac Toe champion kaun hai? Kisi ko <code>/challenge</code> karke pata karo! 🏆',
-  '😏 Bore ho rahe ho? Kisi ke message pe reply karke <code>/challenge</code> bolo — 10 coins ka match ho jaaye!',
-  '🔥 10 coins daav par, jeetega kaun? <code>/challenge @username</code> se abhi shuru karo!',
-  '🏆 Group ka top player kaun hai? <code>/leaderboard</code> bolke check karo!',
+  '<blockquote>🏆 <b>Group Champion Search</b> 🏆</blockquote>\n\n🎮 <b>Game</b> : Tic Tac Toe\n👥 <b>Players Wanted</b> : Anyone brave enough\n💰 <b>Stake</b> : 10 Coins Each\n\nUse <code>/challenge</code> to find out who\'s the best 👇',
+  '<blockquote>😏 <b>Feeling Bored?</b> 😏</blockquote>\n\n🎮 <b>Fix</b> : Play a Match\n💰 <b>Entry</b> : 10 Coins\n🏆 <b>Reward</b> : Winner Takes All\n\nReply to anyone\'s message with <code>/challenge</code> 👇',
+  '<blockquote>🔥 <b>Who Will Win?</b> 🔥</blockquote>\n\n⚔️ <b>Match</b> : Tic Tac Toe Showdown\n💰 <b>Stakes</b> : 10 Coins\n🎯 <b>Goal</b> : Prove you\'re the best\n\nStart now with <code>/challenge @username</code> 👇',
+  '<blockquote>🏆 <b>Leaderboard Check</b> 🏆</blockquote>\n\n📊 <b>Rank</b> : Find your position\n👑 <b>Top Player</b> : Could be you\n🎮 <b>Game</b> : Tic Tac Toe\n\nType <code>/leaderboard</code> to see who\'s on top 👇',
 ];
 
 /**
@@ -546,7 +587,7 @@ export async function sendGroupNudges(env) {
   for (const row of due.results || []) {
     const text = NUDGE_MESSAGES[Math.floor(Math.random() * NUDGE_MESSAGES.length)];
     try {
-      const res = await sendMessage(env, row.chat_id, text, playGameKeyboard(env, null, '🎮 Open Game'));
+      const res = await sendGroupBroadcast(env, row.chat_id, text, playGameKeyboard(env, null, '🎮 Open Game'));
       if (res && res.ok === false) {
         // Most likely the bot was removed from the group / can no longer
         // message it — stop trying instead of retrying forever every tick.
