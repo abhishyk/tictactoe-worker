@@ -180,7 +180,7 @@ async function cleanupExpiredGames(env) {
   const now = Math.floor(Date.now() / 1000);
 
   const expiredStarted = await env.DB.prepare(
-    `SELECT id, player1_id, player2_id FROM games WHERE expires_at < ? AND status = 'started'`
+    `SELECT id, player1_id, player2_id, entry_deducted FROM games WHERE expires_at < ? AND status = 'started'`
   )
     .bind(now)
     .all();
@@ -188,12 +188,15 @@ async function cleanupExpiredGames(env) {
   for (const game of expiredStarted.results || []) {
     // Refund both entry fees, then remove the row. Guard with a status
     // check so a game that gets settled in this same instant isn't double-refunded.
+    // If the entry fee was never actually taken (nobody played a single
+    // move — see gameRoom.js/chargeEntryFees), there's nothing to refund:
+    // this expiry is a true no-fault cancel, not a refund.
     const claim = await env.DB.prepare(
       `UPDATE games SET status = 'expired' WHERE id = ? AND status = 'started'`
     )
       .bind(game.id)
       .run();
-    if (claim.meta && claim.meta.changes > 0) {
+    if (claim.meta && claim.meta.changes > 0 && game.entry_deducted) {
       await env.DB.batch([
         env.DB.prepare('UPDATE users SET coins = coins + ? WHERE telegram_id = ?').bind(
           ENTRY_COST,
