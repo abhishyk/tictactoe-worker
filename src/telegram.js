@@ -191,10 +191,71 @@ export async function handleTelegramWebhook(request, env) {
   return new Response('ok');
 }
 
+/**
+ * Opportunistically remembers every group the bot has been used in — no
+ * separate `my_chat_member` webhook handling needed. Called once per group
+ * message the bot actually processes (i.e. whenever someone uses a command
+ * in that group), which is exactly when we already know its chat id/title.
+ * Used only by the periodic "nudge" broadcast (see sendGroupNudges below).
+ */
+async function registerGroup(env, chat) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO groups (chat_id, title, active, first_seen_at)
+       VALUES (?, ?, 1, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET title = excluded.title, active = 1`
+    )
+      .bind(String(chat.id), chat.title || chat.username || 'Group', nowSeconds())
+      .run();
+  } catch (err) {
+    console.error('registerGroup failed', err);
+  }
+}
+
+// Matched in-memory (zero D1 cost) against every plain group message; only
+// a MATCH ever touches the database.
+const CHAT_TRIGGERS = /\b(tic\s*tac\s*toe|game\s*khel|challenge|coins?|money)\b/i;
+
+// Each reply's button deep-links straight into a Bot match (startapp=playbot
+// — see app.js's init()), not just the app's home screen, so tapping it
+// drops the player directly into a live game against the bot.
+const CHAT_REPLIES = [
+  '⚔️ <b>Tic Tac Toe Challenge!</b> ⚔️\n\nTic Tac Toe pe Tic Tac Toe khelna hai? 😏\n<b>Dum hai to mujhe game mein hara ke dikhao!</b>',
+  "🏆 <b>I'm challenging YOU!</b> 🏆\n\nBeat me and win a prize! 💰\n\nSoch kya rahe ho? Neeche button dabao aur seedha match shuru karo 👇",
+  '😏 <b>Coins ki baat ho rahi hai?</b>\n\nSabse aasan tarika — mujhe (bot ko) hara ke dikhao aur coins jeeto! 🪙\n\n⚔️ Ready ho?',
+];
+
+// Avoids replying every time the trigger fires in a busy group — one
+// reactive nudge is enough for a few minutes, however many people say it.
+const KEYWORD_REPLY_COOLDOWN_SECONDS = 5 * 60;
+
+async function maybeReactToKeyword(env, chat, text) {
+  if (!CHAT_TRIGGERS.test(text)) return;
+
+  const chatId = String(chat.id);
+  try {
+    const row = await env.DB.prepare('SELECT last_keyword_reply_at FROM groups WHERE chat_id = ?')
+      .bind(chatId)
+      .first();
+    const cutoff = nowSeconds() - KEYWORD_REPLY_COOLDOWN_SECONDS;
+    if (row && row.last_keyword_reply_at && row.last_keyword_reply_at > cutoff) return; // still cooling down
+
+    await registerGroup(env, chat); // make sure it's tracked even if no command was ever used
+    const reply = CHAT_REPLIES[Math.floor(Math.random() * CHAT_REPLIES.length)];
+    await sendMessage(env, chatId, reply, playGameKeyboard(env, 'playbot', '⚔️ Beat The Bot'));
+    await env.DB.prepare('UPDATE groups SET last_keyword_reply_at = ? WHERE chat_id = ?')
+      .bind(nowSeconds(), chatId)
+      .run();
+  } catch (err) {
+    console.error('maybeReactToKeyword failed', err);
+  }
+}
+
 async function handleMessage(message, env) {
   const chatId = message.chat.id;
   const fromId = String(message.from.id);
   const username = sanitizeUsername(message.from.username || message.from.first_name);
+  const isGroup = message.chat.type !== 'private';
 
   // A successful Telegram Stars payment arrives as a plain message with a
   // `successful_payment` field (no text/command) — handle it before any
@@ -205,6 +266,16 @@ async function handleMessage(message, env) {
   }
 
   const text = (message.text || '').trim();
+
+  // NOTE: registerGroup() is only ever called from inside the /command
+  // branches below, NOT here for every message. With Group Privacy turned
+  // OFF in BotFather, this webhook receives EVERY message in the group (not
+  // just commands) — writing to D1 on every single one would defeat the
+  // whole point of keeping this cheap. The keyword-reaction path further
+  // down only touches D1 when a trigger word actually matches.
+  if (isGroup && text.startsWith('/')) {
+    await registerGroup(env, message.chat);
+  }
 
   if (text.startsWith('/play')) {
     await sendMessage(
@@ -297,7 +368,7 @@ async function handleMessage(message, env) {
     await sendMessage(
       env,
       chatId,
-      `💰 <b>TicTacToekar Wallet</b>\n\n${username ? '@' + username + ' — ' : ''}ID: <code>${fromId}</code>\n\nCoins: <b>${user.coins}</b>\nMatches: ${user.total_matches}\nWins: ${user.wins}\nLosses: ${user.losses}`
+      `💰 <b>Wallet</b>\n\n${username ? '@' + username + ' — ' : ''}ID: <code>${fromId}</code>\n\nCoins: <b>${user.coins}</b>\nMatches: ${user.total_matches}\nWins: ${user.wins}\nLosses: ${user.losses}`
     );
     return;
   }
@@ -327,6 +398,14 @@ async function handleMessage(message, env) {
       `🏆 <b>Leaderboard</b>\n\n${lines.join('\n') || 'No players yet.'}`
     );
     return;
+  }
+
+  // No command matched. This branch only ever runs once Group Privacy is
+  // turned OFF in BotFather — with it on (the default), Telegram never
+  // forwards a plain, non-command group message to the bot at all, so this
+  // is silently a no-op until that setting is changed.
+  if (isGroup && text) {
+    await maybeReactToKeyword(env, message.chat, text);
   }
 }
 
@@ -437,6 +516,50 @@ export async function announceChallenge(env, chatId, game, challengerName, targe
     `🎮 <b>${challengerName}</b> challenged <b>${targetName}</b>\n\nEntry: 10 coins each`,
     keyboard
   );
+}
+
+// How often each group gets a nudge — 4x/day means every 6 hours.
+const NUDGE_INTERVAL_SECONDS = 6 * 60 * 60;
+
+// A small rotating pool so the group doesn't see the exact same line every
+// time — picked randomly on each send.
+const NUDGE_MESSAGES = [
+  '🎮 Is group ka Tic Tac Toe champion kaun hai? Kisi ko <code>/challenge</code> karke pata karo! 🏆',
+  '😏 Bore ho rahe ho? Kisi ke message pe reply karke <code>/challenge</code> bolo — 10 coins ka match ho jaaye!',
+  '🔥 10 coins daav par, jeetega kaun? <code>/challenge @username</code> se abhi shuru karo!',
+  '🏆 Group ka top player kaun hai? <code>/leaderboard</code> bolke check karo!',
+];
+
+/**
+ * Called from the existing 5-minute cron (see index.js's `scheduled`
+ * handler) — cheap on every tick since it only touches groups whose own
+ * `last_nudged_at` is actually due; most ticks find nothing to send.
+ */
+export async function sendGroupNudges(env) {
+  const cutoff = nowSeconds() - NUDGE_INTERVAL_SECONDS;
+  const due = await env.DB.prepare(
+    `SELECT chat_id FROM groups WHERE active = 1 AND (last_nudged_at IS NULL OR last_nudged_at < ?)`
+  )
+    .bind(cutoff)
+    .all();
+
+  for (const row of due.results || []) {
+    const text = NUDGE_MESSAGES[Math.floor(Math.random() * NUDGE_MESSAGES.length)];
+    try {
+      const res = await sendMessage(env, row.chat_id, text, playGameKeyboard(env, null, '🎮 Open Game'));
+      if (res && res.ok === false) {
+        // Most likely the bot was removed from the group / can no longer
+        // message it — stop trying instead of retrying forever every tick.
+        await env.DB.prepare('UPDATE groups SET active = 0 WHERE chat_id = ?').bind(row.chat_id).run();
+        continue;
+      }
+      await env.DB.prepare('UPDATE groups SET last_nudged_at = ? WHERE chat_id = ?')
+        .bind(nowSeconds(), row.chat_id)
+        .run();
+    } catch (err) {
+      console.error('sendGroupNudges failed for', row.chat_id, err);
+    }
+  }
 }
 
 export { miniAppUrl, playGameKeyboard };
