@@ -248,6 +248,7 @@ export async function cancelMatchmaking(env, telegramId, gameId) {
   return { ok: true };
 }
 
+
 // ---- HTTP handlers -------------------------------------------------------
 
 export async function handleChallengeCreate(request, env) {
