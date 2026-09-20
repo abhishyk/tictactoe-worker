@@ -13,7 +13,7 @@ import {
   handleForfeit,
 } from './games.js';
 import { handleLeaderboard } from './leaderboard.js';
-import { handleTelegramWebhook, authenticateRequest } from './telegram.js';
+import { handleTelegramWebhook, authenticateRequest, sendGroupNudges } from './telegram.js';
 import { handleShopPackages, handleShopInvoice } from './shop.js';
 import { handleSpinInfo, handleSpin } from './spin.js';
 import { handleBotWin } from './botmode.js';
@@ -127,6 +127,7 @@ export default {
   // match that was never finished.
   async scheduled(event, env, ctx) {
     ctx.waitUntil(cleanupExpiredGames(env));
+    ctx.waitUntil(sendGroupNudges(env));
   },
 };
 
