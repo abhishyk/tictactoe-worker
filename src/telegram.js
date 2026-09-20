@@ -114,18 +114,31 @@ export function sendPhoto(env, chatId, photo, caption, replyMarkup) {
 
 // Cached per-isolate (not persisted) — a Worker isolate can live for a
 // while, so this avoids re-fetching the same file_id on every single group
-// message. If the isolate recycles, it's just fetched again once; harmless.
+// message. Only a SUCCESSFUL lookup is cached — a failure (e.g. transient
+// API error) is retried on the next call instead of being remembered
+// forever, which would otherwise silently kill photos for the isolate's
+// whole lifetime after just one bad response.
+let cachedBotId;
 let cachedBotPhotoFileId;
 async function getBotProfilePhotoFileId(env) {
-  if (cachedBotPhotoFileId !== undefined) return cachedBotPhotoFileId;
+  if (cachedBotPhotoFileId) return cachedBotPhotoFileId;
   try {
-    const res = await callTelegramApi(env, 'getChat', { chat_id: '@' + env.TELEGRAM_BOT_USERNAME });
-    cachedBotPhotoFileId = res.ok && res.result.photo ? res.result.photo.big_file_id : null;
+    if (!cachedBotId) {
+      const me = await callTelegramApi(env, 'getMe', {});
+      if (me.ok) cachedBotId = me.result.id;
+    }
+    if (!cachedBotId) return null;
+
+    const res = await callTelegramApi(env, 'getChat', { chat_id: cachedBotId });
+    if (res.ok && res.result.photo) {
+      cachedBotPhotoFileId = res.result.photo.big_file_id;
+    } else {
+      console.error('getBotProfilePhotoFileId: bot has no profile photo set in BotFather, or getChat failed', res);
+    }
   } catch (err) {
     console.error('getBotProfilePhotoFileId failed', err);
-    cachedBotPhotoFileId = null;
   }
-  return cachedBotPhotoFileId;
+  return cachedBotPhotoFileId || null;
 }
 
 /**
@@ -255,15 +268,15 @@ async function registerGroup(env, chat) {
 
 // Matched in-memory (zero D1 cost) against every plain group message; only
 // a MATCH ever touches the database.
-const CHAT_TRIGGERS = /\b(tic\s*tac\s*toe|game\s*khel|challenge|coins?|money)\b/i;
+const CHAT_TRIGGERS = /\b(tic\s*tac\s*toe|game|play|challenge|coins?|money)\b/i;
 
 // Each reply's button deep-links straight into a Bot match (startapp=playbot
 // — see app.js's init()), not just the app's home screen, so tapping it
 // drops the player directly into a live game against the bot.
 const CHAT_REPLIES = [
-  '<blockquote>⚔️ <b>Challenge Alert</b> ⚔️</blockquote>\n\n🎮 <b>Game</b> : Tic Tac Toe\n🏆 <b>Prize</b> : Coins + Bragging Rights\n😏 <b>Dare</b> : Beat me if you can!\n\nTap below to play now 👇',
-  "<blockquote>🏆 <b>I'm Challenging YOU</b> 🏆</blockquote>\n\n💰 <b>Reward</b> : Win Coins\n⚔️ <b>Opponent</b> : This Bot\n🔥 <b>Status</b> : Waiting for you...\n\nThink you can win? Prove it 👇",
-  '<blockquote>😏 <b>Someone Said Coins?</b> 😏</blockquote>\n\n🪙 <b>Easiest Way</b> : Beat the Bot\n🎮 <b>Game</b> : Tic Tac Toe\n⚡ <b>Ready</b> : Let\'s go!\n\nTap the button to start 👇',
+  '😈 <b>BEAT ME IF YOU CAN!</b>\n\nThink you\'ve got the skills to win? 🧠\nIt\'s time to put them to the test.\n\n❌⭕ Tic Tac Toe is ON!\nChallenge a friend.\nMake your move.\nTake the victory. 🏆\n\nWho\'s brave enough to play? 👀',
+  '⚡ <b>QUICK CHALLENGE!</b> ⚡\n\n❌⭕ Tic Tac Toe\nNo excuses.\nNo second chances. 😈\n\nChallenge a friend and prove who\'s smarter! 🏆\n\n🎮 PLAY NOW',
+  '🎮 <b>TIC TAC TOE CHALLENGE!</b> ❌⭕\n\nThink you\'re unbeatable? 😏\nProve it!\n\n🔥 Challenge someone.\n🧠 Make your moves wisely.\n🏆 Get the win!\n\nCan you beat your opponent?\n👇 Tap below and start the game!\n\n🎯 Your move. Your strategy. Your victory.',
 ];
 
 // Avoids replying every time the trigger fires in a busy group — one
@@ -565,10 +578,10 @@ const NUDGE_INTERVAL_SECONDS = 6 * 60 * 60;
 // A small rotating pool so the group doesn't see the exact same line every
 // time — picked randomly on each send.
 const NUDGE_MESSAGES = [
-  '<blockquote>🏆 <b>Group Champion Search</b> 🏆</blockquote>\n\n🎮 <b>Game</b> : Tic Tac Toe\n👥 <b>Players Wanted</b> : Anyone brave enough\n💰 <b>Stake</b> : 10 Coins Each\n\nUse <code>/challenge</code> to find out who\'s the best 👇',
-  '<blockquote>😏 <b>Feeling Bored?</b> 😏</blockquote>\n\n🎮 <b>Fix</b> : Play a Match\n💰 <b>Entry</b> : 10 Coins\n🏆 <b>Reward</b> : Winner Takes All\n\nReply to anyone\'s message with <code>/challenge</code> 👇',
-  '<blockquote>🔥 <b>Who Will Win?</b> 🔥</blockquote>\n\n⚔️ <b>Match</b> : Tic Tac Toe Showdown\n💰 <b>Stakes</b> : 10 Coins\n🎯 <b>Goal</b> : Prove you\'re the best\n\nStart now with <code>/challenge @username</code> 👇',
-  '<blockquote>🏆 <b>Leaderboard Check</b> 🏆</blockquote>\n\n📊 <b>Rank</b> : Find your position\n👑 <b>Top Player</b> : Could be you\n🎮 <b>Game</b> : Tic Tac Toe\n\nType <code>/leaderboard</code> to see who\'s on top 👇',
+  '🔥 <b>ANYONE UP FOR A CHALLENGE?</b> 🔥\n\nThis group\'s got players...\nBut does it have a CHAMPION? 👑\n\n❌⭕ Tic Tac Toe\n💰 10 Coins on the line\n🏆 Winner takes it all\n\nStep up. Prove it. 👇 <code>/challenge</code>',
+  '😴 <b>TOO QUIET IN HERE...</b> 😴\n\nScared to play? Or just busy? 🤔\n\n🎮 One match. That\'s all it takes.\n💰 10 Coins entry\n🏆 Bragging rights included\n\nBreak the silence — <code>/challenge</code> someone now 👇',
+  '👑 <b>WHO\'S THE BEST HERE?</b> 👑\n\nNobody knows yet... 🤷\nTime to find out.\n\n❌⭕ Tic Tac Toe Showdown\n💰 10 Coins Stake\n🎯 Only one winner\n\n<code>/challenge @username</code> and settle it 👇',
+  '🏆 <b>LEADERBOARD CHECK!</b> 🏆\n\nWhere do you rank? 📊\nIs your name even on it? 😏\n\n🎮 Tic Tac Toe\n👑 Top spot open\n\nType <code>/leaderboard</code> and find out 👇',
 ];
 
 /**
