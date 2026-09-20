@@ -332,10 +332,10 @@ async function handleMessage(message, env) {
   }
 
   if (text.startsWith('/play')) {
-    await sendMessage(
+    await sendGroupBroadcast(
       env,
       chatId,
-      '🎮 <b>Tic Tac Toe</b>\n\nChallenge a friend, play the computer, or climb the leaderboard.\n\n💡 In a group: reply to a member\'s message with /challenge, or use /challenge @username directly.',
+      '🎮 <b>TIC TAC TOE — PLAY & EARN!</b> ❌⭕\n\nThink you\'ve got what it takes to win? 😏\nPlay Tic Tac Toe against the Bot and start collecting Coins! 🪙\n\n🏆 WIN = +3 COINS\n🤖 Challenge the Bot and improve your skills with every game.\n\n🎯 YOUR BIG REWARD AWAITS!\nCollect 100,000 Coins 🪙 to unlock the 🎡 SPIN WHEEL!\n\nSpin the wheel for a chance to win:\n⭐ 15 Coins\n⭐ 25 Coins\n⭐ 100 Coins\n⭐ Telegram Premium — 3 Months 🎁\n\n🔥 Play. Win. Mine Coins. Unlock the Wheel.\nAre you ready to reach 100K Coins? 🚀',
       playGameKeyboard(env, null, '▶️ Open Game')
     );
     return;
@@ -442,14 +442,16 @@ async function handleMessage(message, env) {
     // ID shown alongside each name so two players who happen to share a
     // display name (or a player with no @username at all) are still
     // distinguishable — and so you have their ID handy to /challenge them.
-    const lines = rows.map(
-      (r, i) =>
-        `${i + 1}. ${r.username ? '@' + r.username : 'Player'} <code>(${r.telegram_id})</code> — ${r.wins} wins`
-    );
+    const medals = ['🥇', '🥈', '🥉'];
+    const lines = rows.map((r, i) => {
+      const rank = medals[i] || `${i + 1}.`;
+      const name = r.username ? '@' + r.username : 'Player';
+      return `${rank} <b>${name}</b> <code>(${r.telegram_id})</code> — ${r.wins} Wins`;
+    });
     await sendMessage(
       env,
       chatId,
-      `🏆 <b>Leaderboard</b>\n\n${lines.join('\n') || 'No players yet.'}`
+      `🏆 <b>TIC TAC TOE LEADERBOARD</b> 🏆\n\n🔥 The top players are battling it out!\n\n${lines.join('\n') || 'No players yet — be the first champion!'}\n\n💪 Keep playing. Keep winning.\n🚀 <b>Can you make it to the top?</b>`
     );
     return;
   }
@@ -564,10 +566,14 @@ export async function announceChallenge(env, chatId, game, challengerName, targe
       ],
     ],
   };
+  // NOTE: kept as plain text (no photo) — this message gets EDITED in place
+  // via editMessageText once Accept/Decline is tapped (see
+  // handleCallbackQuery below), and Telegram requires editMessageCaption
+  // instead for a photo message, which isn't wired up here.
   return sendMessage(
     env,
     chatId,
-    `🎮 <b>${challengerName}</b> challenged <b>${targetName}</b>\n\nEntry: 10 coins each`,
+    `⚔️ <b>YOU'VE BEEN CHALLENGED!</b> ⚔️\n\n🎮 <b>${challengerName}</b> has challenged <b>${targetName}</b> to a game of Tic Tac Toe!\n\n❌⭕ Make your moves wisely and claim the victory!\n\n🏆 WINNER GETS 10 COINS 🪙\n\nThink you can win? 😏 Accept the challenge and prove it! 🔥`,
     keyboard
   );
 }
