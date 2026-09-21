@@ -17,6 +17,7 @@ import { handleTelegramWebhook, authenticateRequest, sendGroupNudges } from './t
 import { handleShopPackages, handleShopInvoice } from './shop.js';
 import { handleSpinInfo, handleSpin } from './spin.js';
 import { handleBotWin } from './botmode.js';
+import { handleRpsPlay, handle2048Win } from './games2.js';
 import { GameRoom } from './gameRoom.js';
 
 export { GameRoom };
@@ -96,6 +97,12 @@ export default {
       }
       if (path === '/api/bot-win' && request.method === 'POST') {
         return await handleBotWin(request, env);
+      }
+      if (path === '/api/rps/play' && request.method === 'POST') {
+        return await handleRpsPlay(request, env);
+      }
+      if (path === '/api/2048-win' && request.method === 'POST') {
+        return await handle2048Win(request, env);
       }
       if (path === '/api/telegram/webhook' && request.method === 'POST') {
         // Optional shared-secret check (set TELEGRAM_WEBHOOK_SECRET and
