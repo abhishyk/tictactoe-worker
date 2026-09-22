@@ -15,6 +15,7 @@ function publicGame(game, viewerTelegramId) {
   return {
     id: game.id,
     status: game.status,
+    gameType: game.game_type || 'tictactoe',
     player1Id: game.player1_id,
     player2Id: game.player2_id,
     winnerId: game.winner_id || null,
@@ -62,36 +63,46 @@ export async function createChallenge(env, challengerTelegramId, targetTelegramI
  * the "final balance check" required immediately before a game starts,
  * since there is no separate start step in this API surface.
  */
-export async function acceptChallenge(env, gameId, accepterTelegramId) {
+export async function acceptChallenge(env, gameId, accepterTelegramId, gameType = 'tictactoe') {
+  if (!['tictactoe', 'rps'].includes(gameType)) gameType = 'tictactoe';
+
   const game = await getGameRow(env, gameId);
   if (!game) return { ok: false, error: 'Challenge not found.' };
   if (game.status !== 'pending') return { ok: false, error: 'This challenge is no longer pending.' };
   if (game.player2_id !== accepterTelegramId) return { ok: false, error: 'This challenge is not for you.' };
   if (game.expires_at < nowSeconds()) return { ok: false, error: 'This challenge has expired.' };
 
-  const [p1, p2] = await Promise.all([
-    getUserByTelegramId(env, game.player1_id),
-    getUserByTelegramId(env, game.player2_id),
-  ]);
-  if (!p1 || !p2) return { ok: false, error: 'Player not found.' };
+  // Rock Paper Scissors PvP is a pure for-fun mode (per spec: no coin reward
+  // on a win) — so unlike Tic Tac Toe it never charges an entry fee or pays
+  // out a stake, and therefore doesn't need the balance re-check either.
+  if (gameType === 'tictactoe') {
+    const [p1, p2] = await Promise.all([
+      getUserByTelegramId(env, game.player1_id),
+      getUserByTelegramId(env, game.player2_id),
+    ]);
+    if (!p1 || !p2) return { ok: false, error: 'Player not found.' };
 
-  if (p1.coins < ENTRY_COST || p2.coins < ENTRY_COST) {
-    await env.DB.prepare(`UPDATE games SET status = 'cancelled' WHERE id = ? AND status = 'pending'`)
-      .bind(gameId)
-      .run();
-    return { ok: false, error: 'Game cannot start. Both players need at least 10 coins.' };
+    if (p1.coins < ENTRY_COST || p2.coins < ENTRY_COST) {
+      await env.DB.prepare(`UPDATE games SET status = 'cancelled' WHERE id = ? AND status = 'pending'`)
+        .bind(gameId)
+        .run();
+      return { ok: false, error: 'Game cannot start. Both players need at least 10 coins.' };
+    }
   }
 
   // Atomic: flip to 'started' only if still 'pending' (guards double-accept
-  // races). NOTE: the 10-coin entry fee is NOT deducted here anymore — it is
-  // only taken once the FIRST real move is played in the match (see
-  // gameRoom.js's chargeEntryFees()). This means an accepted challenge that
-  // nobody actually plays (app closed, never opened, etc.) never costs
-  // either player a single coin.
+  // races). NOTE: the 10-coin entry fee (Tic Tac Toe only) is NOT deducted
+  // here anymore — it is only taken once the FIRST real move is played in
+  // the match (see gameRoom.js's chargeEntryFees()). This means an accepted
+  // challenge that nobody actually plays (app closed, never opened, etc.)
+  // never costs either player a single coin. `game_type` is set here, at
+  // accept time, because it's the ACCEPTER who picks which game to play
+  // (two buttons shown to them — see telegram.js's announceChallenge and
+  // app.js's challenge modal).
   const claim = await env.DB.prepare(
-    `UPDATE games SET status = 'started' WHERE id = ? AND status = 'pending'`
+    `UPDATE games SET status = 'started', game_type = ? WHERE id = ? AND status = 'pending'`
   )
-    .bind(gameId)
+    .bind(gameType, gameId)
     .run();
   if (!claim.meta || claim.meta.changes === 0) {
     return { ok: false, error: 'This challenge was already handled.' };
@@ -302,8 +313,9 @@ export async function handleChallengeAccept(request, env) {
   }
   const gameId = body?.gameId;
   if (!gameId) return badRequest('gameId is required');
+  const gameType = body?.gameType === 'rps' ? 'rps' : 'tictactoe';
 
-  const result = await acceptChallenge(env, gameId, auth.telegramId);
+  const result = await acceptChallenge(env, gameId, auth.telegramId, gameType);
   if (!result.ok) return json({ error: result.error }, 400);
   return json({ game: publicGame(result.game, auth.telegramId) });
 }
