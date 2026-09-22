@@ -54,18 +54,27 @@ export class GameRoom {
     // only) and "opponent was genuinely playing, then vanished mid-match"
     // (treated as a real forfeit: the vanished player loses).
     this.moveCount = 0;
+
+    // ---- Rock Paper Scissors PvP (only used when this.gameType === 'rps')
+    // In-memory only, same as everything else in this class — a room is a
+    // relay, not a database. No entry fee / coin logic ever touches RPS.
+    this.gameType = null; // resolved from the `games` row in ensurePlayers()
+    this.rpsPicks = { player1: null, player2: null };
+    this.rpsRound = 0;
+    this.rpsResult = null; // { draw, winnerId, player1Choice, player2Choice } once both have picked
   }
 
   async ensurePlayers(gameId) {
     if (this.players) return;
     const row = await this.env.DB.prepare(
-      'SELECT player1_id, player2_id, status, entry_deducted FROM games WHERE id = ?'
+      'SELECT player1_id, player2_id, status, entry_deducted, game_type FROM games WHERE id = ?'
     )
       .bind(gameId)
       .first();
     if (!row) throw new Error('Game not found');
     this.players = { player1: row.player1_id, player2: row.player2_id };
     this.entryDeducted = row.entry_deducted === 1;
+    this.gameType = row.game_type || 'tictactoe';
   }
 
   /**
@@ -224,6 +233,10 @@ export class GameRoom {
       return this.errorResponse('Not a player in this game', 403);
     }
 
+    if (this.gameType === 'rps') {
+      return this.handleRpsFetch(request, telegramId);
+    }
+
     if (request.method === 'GET') {
       return this.jsonState();
     }
@@ -281,5 +294,80 @@ export class GameRoom {
     }
 
     return this.errorResponse('Method not allowed', 405);
+  }
+
+  // ---- Rock Paper Scissors PvP relay --------------------------------------
+  // Two actions only: 'rps-pick' (record this player's choice for the
+  // current round) and 'rps-replay' (either player can trigger it — resets
+  // the room for a fresh round; the other player's next poll simply notices
+  // `round` advanced and follows along). No entry fee, no D1 writes, no coin
+  // settlement — purely a live in-memory handshake, same trust model as the
+  // Tic Tac Toe board/reactions above.
+  async handleRpsFetch(request, telegramId) {
+    if (request.method === 'GET') return this.rpsState(telegramId);
+    if (request.method !== 'POST') return this.errorResponse('Method not allowed', 405);
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return this.errorResponse('Invalid JSON body', 400);
+    }
+
+    if (body.action === 'rps-pick') {
+      const choice = body.choice;
+      if (!['rock', 'paper', 'scissors'].includes(choice)) {
+        return this.errorResponse('Invalid choice', 400);
+      }
+      const isP1 = telegramId === this.players.player1;
+      if (isP1) this.rpsPicks.player1 = choice;
+      else this.rpsPicks.player2 = choice;
+
+      if (this.rpsPicks.player1 && this.rpsPicks.player2 && !this.rpsResult) {
+        this.rpsResult = this.computeRpsResult();
+      }
+      return this.rpsState(telegramId);
+    }
+
+    if (body.action === 'rps-replay') {
+      this.rpsPicks = { player1: null, player2: null };
+      this.rpsResult = null;
+      this.rpsRound += 1;
+      return this.rpsState(telegramId);
+    }
+
+    return this.errorResponse('Unknown action', 400);
+  }
+
+  computeRpsResult() {
+    const a = this.rpsPicks.player1;
+    const b = this.rpsPicks.player2;
+    if (a === b) return { draw: true, winnerId: null, player1Choice: a, player2Choice: b };
+    const beats = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+    const p1Wins = beats[a] === b;
+    return {
+      draw: false,
+      winnerId: p1Wins ? this.players.player1 : this.players.player2,
+      player1Choice: a,
+      player2Choice: b,
+    };
+  }
+
+  rpsState(telegramId) {
+    const isP1 = telegramId === this.players.player1;
+    const myPick = isP1 ? this.rpsPicks.player1 : this.rpsPicks.player2;
+    const oppPick = isP1 ? this.rpsPicks.player2 : this.rpsPicks.player1;
+    const revealed = !!this.rpsResult;
+    return new Response(
+      JSON.stringify({
+        round: this.rpsRound,
+        myPick: myPick || null,
+        oppPicked: !!oppPick,
+        revealed,
+        oppPick: revealed ? oppPick : null,
+        result: revealed ? this.rpsResult : null,
+      }),
+      { headers: { 'Content-Type': 'application/json' } }
+    );
   }
 }
