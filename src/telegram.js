@@ -332,11 +332,20 @@ async function handleMessage(message, env) {
   }
 
   if (text.startsWith('/play')) {
+    // Two separate deep links (startapp values), one per game — 'playbot'
+    // drops straight into a Bot Tic Tac Toe match, 'playrps' straight into
+    // solo Rock Paper Scissors (see app.js's init()).
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '❌⭕ Tic Tac Toe (vs Bot)', url: miniAppUrl(env, 'playbot') }],
+        [{ text: '✊✋✌️ Rock Paper Scissors', url: miniAppUrl(env, 'playrps') }],
+      ],
+    };
     await sendGroupBroadcast(
       env,
       chatId,
-      '🎮 <b>TIC TAC TOE — PLAY & EARN!</b> ❌⭕\n\nThink you\'ve got what it takes to win? 😏\nPlay Tic Tac Toe against the Bot and start collecting Coins! 🪙\n\n🏆 WIN = +3 COINS\n🤖 Challenge the Bot and improve your skills with every game.\n\n🎯 YOUR BIG REWARD AWAITS!\nCollect 100,000 Coins 🪙 to unlock the 🎡 SPIN WHEEL!\n\nSpin the wheel for a chance to win:\n⭐ 15 Coins\n⭐ 25 Coins\n⭐ 100 Coins\n⭐ Telegram Premium — 3 Months 🎁\n\n🔥 Play. Win. Mine Coins. Unlock the Wheel.\nAre you ready to reach 100K Coins? 🚀',
-      playGameKeyboard(env, null, '▶️ Open Game')
+      '🎮 <b>PLAY & EARN!</b>\n\nThink you\'ve got what it takes to win? 😏\n\n❌⭕ <b>Tic Tac Toe</b> vs the Bot — 🏆 WIN = +3 COINS\n✊✋✌️ <b>Rock Paper Scissors</b> vs the Bot — 🏆 WIN = +1 COIN\n\n🎯 YOUR BIG REWARD AWAITS!\nCollect 100,000 Coins 🪙 to unlock the 🎡 SPIN WHEEL!\n\nSpin the wheel for a chance to win:\n⭐ 15 Coins\n⭐ 25 Coins\n⭐ 100 Coins\n⭐ Telegram Premium — 3 Months 🎁\n\n🔥 Play. Win. Mine Coins. Unlock the Wheel.\nAre you ready to reach 100K Coins? 🚀',
+      keyboard
     );
     return;
   }
@@ -474,20 +483,23 @@ async function handleCallbackQuery(cbq, env) {
 
   await getOrCreateUser(env, fromId, username); // ensure the responder exists
 
-  if (data.startsWith('accept:')) {
-    const gameId = data.slice('accept:'.length);
-    const result = await acceptChallenge(env, gameId, fromId);
+  if (data.startsWith('accept_ttt:') || data.startsWith('accept_rps:')) {
+    const gameType = data.startsWith('accept_ttt:') ? 'tictactoe' : 'rps';
+    const gameId = data.slice(data.indexOf(':') + 1);
+    const result = await acceptChallenge(env, gameId, fromId, gameType);
     if (!result.ok) {
       await answerCallbackQuery(env, cbq.id, result.error);
       return;
     }
     const p1 = await getUserByTelegramId(env, result.game.player1_id);
     const p2 = await getUserByTelegramId(env, result.game.player2_id);
+    const label = gameType === 'rps' ? '✊ Rock Paper Scissors' : '❌⭕ Tic Tac Toe';
+    const stakeLine = gameType === 'rps' ? 'Just for fun — no coins at stake' : 'Entry: 10 coins each';
     await editMessageText(
       env,
       chatId,
       messageId,
-      `🎮 <b>Match Ready!</b>\n\n${p1?.username ? '@' + p1.username : 'Player 1'} vs ${p2?.username ? '@' + p2.username : 'Player 2'}\n\nEntry: 10 coins each`,
+      `🎮 <b>Match Ready — ${label}!</b>\n\n${p1?.username ? '@' + p1.username : 'Player 1'} vs ${p2?.username ? '@' + p2.username : 'Player 2'}\n\n${stakeLine}`,
       playGameKeyboard(env, gameId, '▶️ PLAY GAME')
     );
     await answerCallbackQuery(env, cbq.id, 'Challenge accepted!');
@@ -556,24 +568,31 @@ async function handleSuccessfulPayment(message, env) {
   await sendMessage(env, chatId, `✅ Payment received — <b>+${pkg.coins} coins</b> added to your wallet. Enjoy! 🎮`);
 }
 
-/** Sends a group-chat challenge message with Accept/Decline buttons. */
+/**
+ * Sends a group-chat challenge message. Instead of a single Accept button,
+ * the challenged player gets TWO game buttons — whichever they tap both
+ * accepts the challenge AND picks which game the match opens as (see
+ * handleCallbackQuery's accept_ttt:/accept_rps: handling and
+ * acceptChallenge() in games.js, which is what actually stores the choice).
+ */
 export async function announceChallenge(env, chatId, game, challengerName, targetName) {
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '✅ Accept', callback_data: `accept:${game.id}` },
-        { text: '❌ Decline', callback_data: `decline:${game.id}` },
+        { text: '❌⭕ Tic Tac Toe', callback_data: `accept_ttt:${game.id}` },
+        { text: '✊ Rock Paper Scissors', callback_data: `accept_rps:${game.id}` },
       ],
+      [{ text: '❌ Decline', callback_data: `decline:${game.id}` }],
     ],
   };
   // NOTE: kept as plain text (no photo) — this message gets EDITED in place
-  // via editMessageText once Accept/Decline is tapped (see
-  // handleCallbackQuery below), and Telegram requires editMessageCaption
-  // instead for a photo message, which isn't wired up here.
+  // via editMessageText once a button is tapped (see handleCallbackQuery
+  // below), and Telegram requires editMessageCaption instead for a photo
+  // message, which isn't wired up here.
   return sendMessage(
     env,
     chatId,
-    `⚔️ <b>YOU'VE BEEN CHALLENGED!</b> ⚔️\n\n🎮 <b>${challengerName}</b> has challenged <b>${targetName}</b> to a game of Tic Tac Toe!\n\n❌⭕ Make your moves wisely and claim the victory!\n\n🏆 WINNER GETS 10 COINS 🪙\n\nThink you can win? 😏 Accept the challenge and prove it! 🔥`,
+    `⚔️ <b>YOU'VE BEEN CHALLENGED!</b> ⚔️\n\n🎮 <b>${challengerName}</b> has challenged <b>${targetName}</b>!\n\nPick a game to accept with:\n❌⭕ <b>Tic Tac Toe</b> — 10 coins entry, winner takes 20\n✊✋✌️ <b>Rock Paper Scissors</b> — just for fun, no coins\n\nThink you can win? 😏`,
     keyboard
   );
 }
