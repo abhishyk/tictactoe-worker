@@ -28,8 +28,16 @@ async function getGameRow(env, gameId) {
   return env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(gameId).first();
 }
 
-/** Creates a pending challenge. Only the challenger's balance is known-good here — see acceptChallenge for the required re-check. */
-export async function createChallenge(env, challengerTelegramId, targetTelegramId) {
+/**
+ * Creates a pending challenge. Only the challenger's balance is known-good
+ * here — see acceptChallenge for the required re-check. `chatId` is stored
+ * (not just used for the one-off announceChallenge message) so that, for
+ * Rock Paper Scissors specifically, gameRoom.js can post each round's
+ * result back into the SAME group once the match is actually played —
+ * without it, a match started in a group has no way to remember which
+ * group to report back to.
+ */
+export async function createChallenge(env, challengerTelegramId, targetTelegramId, chatId = null) {
   if (challengerTelegramId === targetTelegramId) {
     return { ok: false, error: 'You cannot challenge yourself.' };
   }
@@ -45,10 +53,10 @@ export async function createChallenge(env, challengerTelegramId, targetTelegramI
   const id = generateId();
   const now = nowSeconds();
   await env.DB.prepare(
-    `INSERT INTO games (id, player1_id, player2_id, status, created_at, expires_at)
-     VALUES (?, ?, ?, 'pending', ?, ?)`
+    `INSERT INTO games (id, player1_id, player2_id, status, created_at, expires_at, chat_id)
+     VALUES (?, ?, ?, 'pending', ?, ?, ?)`
   )
-    .bind(id, challengerTelegramId, targetTelegramId, now, now + GAME_TTL_SECONDS)
+    .bind(id, challengerTelegramId, targetTelegramId, now, now + GAME_TTL_SECONDS, chatId ? String(chatId) : null)
     .run();
 
   const game = await getGameRow(env, id);
@@ -72,9 +80,11 @@ export async function acceptChallenge(env, gameId, accepterTelegramId, gameType 
   if (game.player2_id !== accepterTelegramId) return { ok: false, error: 'This challenge is not for you.' };
   if (game.expires_at < nowSeconds()) return { ok: false, error: 'This challenge has expired.' };
 
-  // Rock Paper Scissors PvP is a pure for-fun mode (per spec: no coin reward
-  // on a win) — so unlike Tic Tac Toe it never charges an entry fee or pays
-  // out a stake, and therefore doesn't need the balance re-check either.
+  // Rock Paper Scissors PvP has its own, much smaller stake (1 coin, not
+  // Tic Tac Toe's 10) — and unlike Tic Tac Toe it's never pre-charged at
+  // accept/first-move time at all. Each round settles its own 1-coin stake
+  // the instant that round's result is known (see gameRoom.js's
+  // settleRpsRound), so there's no upfront balance to re-check here.
   if (gameType === 'tictactoe') {
     const [p1, p2] = await Promise.all([
       getUserByTelegramId(env, game.player1_id),
@@ -274,8 +284,9 @@ export async function handleChallengeCreate(request, env) {
   }
   const targetTelegramId = String(body?.targetTelegramId || '');
   if (!targetTelegramId) return badRequest('targetTelegramId is required');
+  const chatId = body.chatId ? String(body.chatId) : null;
 
-  const result = await createChallenge(env, auth.telegramId, targetTelegramId);
+  const result = await createChallenge(env, auth.telegramId, targetTelegramId, chatId);
   if (!result.ok) return json({ error: result.error }, 400);
 
   // Optionally announce in a Telegram group chat if the client tells us which one.
