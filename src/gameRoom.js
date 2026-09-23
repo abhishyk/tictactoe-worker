@@ -13,6 +13,7 @@
 // by the D1-backed, idempotent /api/game/:id/result endpoint in games.js,
 // which does not depend on this object at all.
 import { ENTRY_COST } from './utils.js';
+import { sendMessage, playGameKeyboard } from './telegram.js';
 
 // Emoji reactions players can send each other mid-match. Fixed whitelist so
 // the relay only ever carries a known-safe value, never arbitrary text.
@@ -21,6 +22,15 @@ const ALLOWED_REACTIONS = ['👍', '😂', '😮', '🔥', '😢', '👏', '❤�
 // How long the player ON TURN can sit idle before the WAITING player is
 // allowed to end the match themselves (see claimTimeout()).
 const INACTIVITY_TIMEOUT_MS = 60 * 1000;
+
+// PvP Rock Paper Scissors stake — deliberately tiny (1 coin, not the 10-coin
+// Tic Tac Toe entry fee) and, importantly, settled ONLY once a round's
+// result is already known (see settleRpsRound), never pre-charged before
+// both players have picked. That ordering matters: it means an opponent who
+// abandons the match after only ONE player has picked can never leave that
+// player's coin "stuck" mid-round — nothing is ever taken until there's
+// something to actually pay out.
+const RPS_ROUND_STAKE = 1;
 
 export class GameRoom {
   constructor(state, env) {
@@ -234,7 +244,7 @@ export class GameRoom {
     }
 
     if (this.gameType === 'rps') {
-      return this.handleRpsFetch(request, telegramId);
+      return this.handleRpsFetch(request, telegramId, gameId);
     }
 
     if (request.method === 'GET') {
@@ -303,7 +313,7 @@ export class GameRoom {
   // `round` advanced and follows along). No entry fee, no D1 writes, no coin
   // settlement — purely a live in-memory handshake, same trust model as the
   // Tic Tac Toe board/reactions above.
-  async handleRpsFetch(request, telegramId) {
+  async handleRpsFetch(request, telegramId, gameId) {
     if (request.method === 'GET') return this.rpsState(telegramId);
     if (request.method !== 'POST') return this.errorResponse('Method not allowed', 405);
 
@@ -325,6 +335,11 @@ export class GameRoom {
 
       if (this.rpsPicks.player1 && this.rpsPicks.player2 && !this.rpsResult) {
         this.rpsResult = this.computeRpsResult();
+        // Both guarded by the same `!this.rpsResult` check above, so each
+        // only ever runs once per round (this DO instance is the one place
+        // that ever computes a round's real outcome).
+        await this.settleRpsRound();
+        await this.announceRpsRoundResult(gameId);
       }
       return this.rpsState(telegramId);
     }
@@ -351,6 +366,72 @@ export class GameRoom {
       player1Choice: a,
       player2Choice: b,
     };
+  }
+
+  /**
+   * Settles the 1-coin stake for a decided round: the LOSER pays the WINNER
+   * RPS_ROUND_STAKE, checked and moved atomically right here — after the
+   * outcome is already known, never before. A draw moves nothing (nothing
+   * was ever pre-charged). If the loser doesn't actually have the coin
+   * (rare — e.g. they spent it elsewhere between rounds), the round's
+   * result still stands, it just quietly settles for 0; `coinsSettled` on
+   * the result tells the client whether a coin actually moved, purely for
+   * display purposes (never trusted for anything else).
+   */
+  async settleRpsRound() {
+    if (this.rpsResult.draw) {
+      this.rpsResult.coinsSettled = true; // nothing to move
+      return;
+    }
+    const loserId = this.rpsResult.winnerId === this.players.player1 ? this.players.player2 : this.players.player1;
+    const charge = await this.env.DB.prepare(
+      'UPDATE users SET coins = coins - ? WHERE telegram_id = ? AND coins >= ?'
+    )
+      .bind(RPS_ROUND_STAKE, loserId, RPS_ROUND_STAKE)
+      .run();
+    if (!charge.meta || charge.meta.changes === 0) {
+      this.rpsResult.coinsSettled = false; // loser didn't have enough — no coins moved either way
+      return;
+    }
+    await this.env.DB.prepare('UPDATE users SET coins = coins + ? WHERE telegram_id = ?')
+      .bind(RPS_ROUND_STAKE, this.rpsResult.winnerId)
+      .run();
+    this.rpsResult.coinsSettled = true;
+  }
+
+  /**
+   * Posts "PlayerA beat PlayerB in Rock Paper Scissors" back into the group
+   * the /challenge came from — only if this match actually started from a
+   * group `chat_id` (in-app "Find Player" challenges have none, so those
+   * stay silent, same as they always have). Skips draws (nobody to
+   * announce). A losing/winning claim is never client-trusted here — this
+   * is the SAME computeRpsResult() the two live players' picks were judged
+   * by, so it's exactly as authoritative as the round itself.
+   */
+  async announceRpsRoundResult(gameId) {
+    try {
+      if (!this.rpsResult || this.rpsResult.draw) return;
+
+      const row = await this.env.DB.prepare('SELECT chat_id FROM games WHERE id = ?').bind(gameId).first();
+      if (!row || !row.chat_id) return;
+
+      const [p1, p2] = await Promise.all([
+        this.env.DB.prepare('SELECT username FROM users WHERE telegram_id = ?').bind(this.players.player1).first(),
+        this.env.DB.prepare('SELECT username FROM users WHERE telegram_id = ?').bind(this.players.player2).first(),
+      ]);
+      const winnerIsP1 = this.rpsResult.winnerId === this.players.player1;
+      const winnerName = winnerIsP1 ? (p1?.username ? '@' + p1.username : 'Player 1') : (p2?.username ? '@' + p2.username : 'Player 2');
+      const loserName = winnerIsP1 ? (p2?.username ? '@' + p2.username : 'Player 2') : (p1?.username ? '@' + p1.username : 'Player 1');
+
+      await sendMessage(
+        this.env,
+        row.chat_id,
+        `✊✋✌️ <b>${winnerName}</b> beat <b>${loserName}</b> in Rock Paper Scissors! 🏆\n\nThink you can do better? 😏`,
+        playGameKeyboard(this.env, null, '⚔️ Challenge a Friend')
+      );
+    } catch (err) {
+      console.error('announceRpsRoundResult failed', err);
+    }
   }
 
   rpsState(telegramId) {
