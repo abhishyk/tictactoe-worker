@@ -375,6 +375,40 @@ export async function handleMatchmakingCancel(request, env) {
   return json({ ok: true });
 }
 
+/**
+ * Marks an RPS PvP match as no longer active once a player leaves (Home
+ * button, or navigating away mid-round) — see rps.js's stopPvp(). Unlike
+ * Tic Tac Toe's forfeitGame, this never moves coins (RPS has no upfront
+ * stake to forfeit — each round settles its own 1-coin stake the instant
+ * it's decided, in gameRoom.js). Its only job is making sure a STALE
+ * "▶️ PLAY GAME" deep link (from the original Telegram challenge message)
+ * can never silently drop someone back into a match whose opponent is
+ * already gone — see app.js's startParam handling, which falls back to
+ * solo vs-Bot RPS once this game's status is no longer 'started'.
+ */
+export async function leaveRpsMatch(env, gameId, telegramId) {
+  const game = await getGameRow(env, gameId);
+  if (!game) return { ok: true }; // already gone — nothing to clean up
+  if (game.player1_id !== telegramId && game.player2_id !== telegramId) {
+    return { ok: false, error: 'You are not a player in this game' };
+  }
+  if (game.game_type !== 'rps') return { ok: true }; // only meaningful for RPS
+
+  await env.DB.prepare(`UPDATE games SET status = 'cancelled' WHERE id = ? AND status = 'started'`)
+    .bind(gameId)
+    .run();
+  return { ok: true };
+}
+
+export async function handleRpsLeave(request, env, gameId) {
+  const auth = await authenticateRequest(request, env);
+  if (!auth) return unauthorized();
+
+  const result = await leaveRpsMatch(env, gameId, auth.telegramId);
+  if (!result.ok) return json({ error: result.error }, 400);
+  return json({ ok: true });
+}
+
 export async function handleForfeit(request, env, gameId) {
   const auth = await authenticateRequest(request, env);
   if (!auth) return unauthorized();
