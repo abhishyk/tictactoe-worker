@@ -11,6 +11,7 @@ import {
   handleGetGame,
   handleGameResult,
   handleForfeit,
+  handleRpsLeave,
 } from './games.js';
 import { handleLeaderboard } from './leaderboard.js';
 import { handleTelegramWebhook, authenticateRequest, sendGroupNudges } from './telegram.js';
@@ -67,6 +68,10 @@ export default {
       const gameForfeitMatch = path.match(/^\/api\/game\/([a-zA-Z0-9_-]+)\/forfeit$/);
       if (gameForfeitMatch && request.method === 'POST') {
         return await handleForfeit(request, env, gameForfeitMatch[1]);
+      }
+      const rpsLeaveMatch = path.match(/^\/api\/game\/([a-zA-Z0-9_-]+)\/rps-leave$/);
+      if (rpsLeaveMatch && request.method === 'POST') {
+        return await handleRpsLeave(request, env, rpsLeaveMatch[1]);
       }
       const gameStateMatch = path.match(/^\/api\/game\/([a-zA-Z0-9_-]+)\/state$/);
       if (gameStateMatch && (request.method === 'GET' || request.method === 'POST')) {
