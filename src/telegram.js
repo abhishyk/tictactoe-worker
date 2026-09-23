@@ -406,7 +406,7 @@ async function handleMessage(message, env) {
     await getOrCreateUser(env, fromId, username);
     await getOrCreateUser(env, targetId, targetUsername);
 
-    const result = await createChallenge(env, fromId, targetId);
+    const result = await createChallenge(env, fromId, targetId, chatId);
     if (!result.ok) {
       await sendMessage(env, chatId, `⚠️ ${result.error}`);
       return;
@@ -494,7 +494,7 @@ async function handleCallbackQuery(cbq, env) {
     const p1 = await getUserByTelegramId(env, result.game.player1_id);
     const p2 = await getUserByTelegramId(env, result.game.player2_id);
     const label = gameType === 'rps' ? '✊ Rock Paper Scissors' : '❌⭕ Tic Tac Toe';
-    const stakeLine = gameType === 'rps' ? 'Just for fun — no coins at stake' : 'Entry: 10 coins each';
+    const stakeLine = gameType === 'rps' ? '1 coin per round — loser pays winner' : 'Entry: 10 coins each';
     await editMessageText(
       env,
       chatId,
@@ -592,7 +592,7 @@ export async function announceChallenge(env, chatId, game, challengerName, targe
   return sendMessage(
     env,
     chatId,
-    `⚔️ <b>YOU'VE BEEN CHALLENGED!</b> ⚔️\n\n🎮 <b>${challengerName}</b> has challenged <b>${targetName}</b>!\n\nPick a game to accept with:\n❌⭕ <b>Tic Tac Toe</b> — 10 coins entry, winner takes 20\n✊✋✌️ <b>Rock Paper Scissors</b> — just for fun, no coins\n\nThink you can win? 😏`,
+    `⚔️ <b>YOU'VE BEEN CHALLENGED!</b> ⚔️\n\n🎮 <b>${challengerName}</b> has challenged <b>${targetName}</b>!\n\nPick a game to accept with:\n❌⭕ <b>Tic Tac Toe</b> — 10 coins entry, winner takes 20\n✊✋✌️ <b>Rock Paper Scissors</b> — 1 coin per round, loser pays winner (replay as many rounds as you want)\n\nThink you can win? 😏`,
     keyboard
   );
 }
